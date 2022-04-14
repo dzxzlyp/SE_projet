@@ -1,0 +1,240 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <math.h>
+#include <unistd.h>
+#include <string.h>
+#include <sys/wait.h>
+
+#define PRIX_CREUX 60
+#define PRIX_PLEIN 130
+#define SURFACE_UNI 0.48
+#define NUMBER_PER_PALETTE 50
+#define MSGSIZE 1024
+
+char *article;
+char *serveur;
+char *acheteur;
+char *transporateur;
+
+int prix_palette_unitaire;
+//stock
+int stock_palette;		//nb of palette in stock (50 parings/palette)
+int stock_m2;			//surface of one palette of 50 parings
+int prix_total;
+
+//order
+float order_m2;
+int nb_palette_order;
+char *num_carte;
+char *mdp_carte;
+char *crypto;
+
+int acheteur_serveur[2], serveur_acheteur[2], serveur_trans[2], trans_acheteur[2], acheteur_trans[2];
+
+//fonction generating randomly a number
+int random_number(int a, int b){
+  unsigned int cpt;
+  srand ((unsigned) time (NULL) + cpt);
+  cpt++;
+  return ((rand () % (b - a + 1)) + a);
+}
+
+//fonction generating randomly a type of article
+void random_article(){
+  article = random_number (0, 1) ? "creux" : "plein";
+  prix_palette_unitaire = (article == "creux") ? PRIX_CREUX : PRIX_PLEIN;
+}
+
+//fonction generating randomly a server
+void random_serveur(){
+  serveur = random_number (0, 1) ? "sw1" : "sw2";
+}
+
+//fonction genarating randomly a buyer
+void random_acheteur(){
+  acheteur = random_number (0, 1) ? "Antoine" : "Fran\u00e7ois";
+  num_carte = (acheteur == "Antoine") ? "0123****8901" : "9876****1098";
+  mdp_carte = (acheteur == "Antoine") ? "1**4" : "9**6";
+  crypto = (acheteur == "Antoine") ? "***" : "***";
+}
+
+//fonction generating randomly a transporateur
+void random_transporateur(){
+  transporateur = random_number (0, 1) ? "Jule" : "Anne";
+}
+
+//fonction generating randomly the number of stock of palette & the surface 
+void random_stock(){
+  stock_palette = random_number (800, 1000);
+  stock_m2 = SURFACE_UNI * stock_palette * NUMBER_PER_PALETTE;
+}
+
+//fonction generating randomly the surface of order
+void random_order_surface(){
+  order_m2 = random_number (24, stock_m2);
+}
+
+//fonction calcul the number of palette
+void palette_order(){
+  nb_palette_order = ceil (order_m2 / NUMBER_PER_PALETTE / SURFACE_UNI);
+  prix_total = (article=="creux") ? (PRIX_CREUX*nb_palette_order) : (PRIX_PLEIN*nb_palette_order);
+}
+
+//----------process of buyer--------------
+void acheteur_processus(){
+    char buf[MSGSIZE];
+    //send the name of buyer
+    random_acheteur();
+    sprintf(buf,"%s",acheteur);
+    write(acheteur_serveur[1],buf,(strlen(buf)+1));
+    read(serveur_acheteur[0],buf,MSGSIZE);
+    
+    //send the article
+    random_article();
+    sprintf(buf,"%s",article);
+    write(acheteur_serveur[1],buf,(strlen(buf)+1));
+    
+    //read the stock
+    read(serveur_acheteur[0],buf,MSGSIZE);
+    char stock_receive[10];
+    strcpy(stock_receive,buf);
+    stock_m2 = atoi(stock_receive);
+    printf("%s re\u00e7oit: \n- Stock d'article [%s]: %d\n",acheteur,article,stock_m2);
+    
+    //send the surface wanted
+    random_order_surface();
+    sprintf(buf,"%f",order_m2);
+    write(acheteur_serveur[1],buf,(strlen(buf)+1));
+    
+    //read the quantity and the price
+    read(serveur_acheteur[0],buf,MSGSIZE);
+    printf("- %s\n",buf);
+    
+    //pay
+    sprintf(buf,"* Num\u00e9ro de la carte: %s\n* Mot de passe: %s\n* Ctypto: %s",num_carte,mdp_carte,crypto);
+    write(acheteur_serveur[1],buf,(strlen(buf)+1));
+    
+    //reception of the pay, server
+    read(serveur_acheteur[0],buf,MSGSIZE);
+    printf("%s",buf);
+    
+    
+    //reception, transporter
+    read(trans_acheteur[0],buf,MSGSIZE);
+    
+    //signe
+    sprintf(buf,"\nLivr\u00e9. Signature client: %s",acheteur);
+    write(acheteur_trans[1],buf,(strlen(buf)+1));
+}
+
+//----------process of server--------------
+void serveur_processus(){
+    char buf[MSGSIZE];
+    char buyer[10];
+    char goods[10];
+    random_serveur();
+    printf("Serveur %s re\u00e7oit: \n",serveur);
+    
+    //read the name of buyer
+    read(acheteur_serveur[0],buf,MSGSIZE);
+    strcpy(buyer,buf);
+    acheteur = buyer;
+    printf("- Acheteur: %s\n",acheteur);
+    sprintf(buf,"RECEIVE");
+    write(serveur_acheteur[1],buf,(strlen(buf)+1));
+    
+    //read the article
+    read(acheteur_serveur[0],buf,MSGSIZE);
+    strcpy(goods,buf);
+    article = goods;
+    printf("- Article demand\u00e9: %s\n",article);
+
+    //write the stock
+    random_stock();
+    sprintf(buf,"%d",stock_m2);
+    write(serveur_acheteur[1],buf,(strlen(buf)+1));
+    
+    //read the surface wanted
+    read(acheteur_serveur[0],buf,MSGSIZE);
+    order_m2 = atof(buf);
+    printf("(Surface demand\u00e9e: %f)",order_m2);
+    
+    //send the price
+    palette_order();
+    sprintf(buf,"Nombre de palette: %d\n- Prix total: %d€",nb_palette_order,prix_total);
+    write(serveur_acheteur[1],buf,(strlen(buf)+1));
+    
+    //read the information of card
+    read(acheteur_serveur[0],buf,MSGSIZE);
+    printf("\nInformation de la carte bancaire:\n%s\n",buf);
+
+    
+    //write to buyer the accuse
+    sprintf(buf,"Paiment re\u00e7u: %d€\n",prix_total);
+    write(serveur_acheteur[1],buf,(strlen(buf)+1));
+  
+    //write to trans
+    sprintf(buf,"- Article: %s\n- Nombre de palette: %d",article,nb_palette_order);
+    write(serveur_trans[1],buf,(strlen(buf)+1));
+}
+
+void tranporteur_processus(){
+     char buf[MSGSIZE];
+     char bon[200];
+     random_transporateur();
+     
+     read(serveur_trans[0],bon,MSGSIZE);
+     printf("%s re\u00e7oit (exemplaire*2):\n%s",transporateur,bon);
+     
+     //write to buyer
+     sprintf(buf,"Pour l'acheteur: %s",bon);
+     write(trans_acheteur[1],buf,(strlen(buf)+1));
+     
+     //read the signe
+     read(acheteur_trans[0],buf,MSGSIZE);
+     printf("%s",buf);
+}
+
+
+int main(){
+    pipe(acheteur_serveur);
+    pipe(serveur_acheteur);
+    pipe(serveur_trans);
+    pipe(trans_acheteur);
+    pipe(acheteur_trans);
+    
+    pid_t pid_acheteur, pid_trans;
+    pid_acheteur = fork();
+    if(pid_acheteur<0){
+        exit(1);
+    }
+    else if(pid_acheteur==0){
+        close(acheteur_trans[0]);
+        close(acheteur_serveur[0]);
+        acheteur_processus();
+    }
+    else{//if is strill in the father
+        pid_trans=fork();
+        if(pid_trans<0){
+            exit(1);
+        }else if(pid_trans==0){
+            close(trans_acheteur[0]);
+            tranporteur_processus();
+        }
+        else{
+            close(serveur_acheteur[0]);
+            close(serveur_trans[0]);
+            serveur_processus();
+             wait(NULL);
+        }
+       
+    }
+    
+    
+    
+    return 0;
+}
+    
+
+
